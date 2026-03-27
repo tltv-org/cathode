@@ -31,8 +31,9 @@ cp .env.example .env
 docker compose up -d
 ```
 
-On first run, cathode generates a test card (SMPTE bars with channel name),
-an Ed25519 keypair for federation, and starts streaming.
+On first run, cathode creates an Ed25519 keypair for federation and starts
+streaming immediately. System videos (failover + slate) generate in the
+background.
 
 ## Configuration
 
@@ -78,9 +79,43 @@ identity:
 output:
   type: "hls"
 
+encoding:
+  width: 1920
+  height: 1080
+  fps: 30
+  video_bitrate: 3000
+  preset: "ultrafast"
+
 media:
   base_dir: "/media"
   program_dir: "/data/programs"
+```
+
+### Encoding
+
+The `encoding` section in the channel YAML controls the mixer resolution,
+frame rate, and output encoding. Defaults to 1920x1080@30fps. Lower
+resolution reduces CPU usage significantly.
+
+These settings can also be changed at runtime via
+`PATCH /api/playout/encoding` (triggers an engine restart).
+
+### Layer presets
+
+The `layer_preset` field controls how many GStreamer pipelines run.
+Each layer has its own interpipeline processing chain, so fewer layers
+means less CPU.
+
+| Preset | Layers | Use case |
+|---|---|---|
+| `solo` | 1 (content) | Lowest CPU — single file loop, no failover |
+| `minimal` | 2 (failover + content) | Light — failover safety net + one content layer |
+| `standard` | 4 (failover + A + B + blinder) | Full broadcast — default |
+
+Set in channel YAML:
+
+```yaml
+layer_preset: "solo"
 ```
 
 ### Adding media

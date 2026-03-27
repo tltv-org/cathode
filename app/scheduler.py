@@ -134,15 +134,46 @@ def _generate_video_gstreamer(
             logger.error("GStreamer error: %s (%s)", err.message, debug)
             return False
 
-        logger.info("Generated: %s", output_path)
-        return True
-
     except Exception as exc:
         logger.error("GStreamer generation failed: %s", exc)
         return False
     finally:
         if pipeline is not None:
             pipeline.set_state(Gst.State.NULL)
+
+    # Validate output — catch malformed/truncated files before they
+    # get loaded on a layer and cause visual glitches.
+    out = Path(output_path)
+    if not out.exists():
+        logger.error("Generated file missing: %s", output_path)
+        return False
+
+    size = out.stat().st_size
+    # A valid 30s 1080p MP4 should be at least a few MB.  Under 100KB
+    # means the encoder produced garbage (common on low-memory VPS).
+    min_size = max(50_000, duration * 1000)  # ~1KB/s absolute minimum
+    if size < min_size:
+        logger.error(
+            "Generated video too small (%d bytes for %ds) — likely corrupt: %s",
+            size,
+            duration,
+            output_path,
+        )
+        out.unlink(missing_ok=True)
+        return False
+
+    # Probe duration to confirm the container is valid
+    actual_dur = get_clip_duration(str(out))
+    if actual_dur <= 0:
+        logger.error(
+            "Generated video has no detectable duration — corrupt: %s",
+            output_path,
+        )
+        out.unlink(missing_ok=True)
+        return False
+
+    logger.info("Generated: %s (%d bytes, %.1fs)", output_path, size, actual_dur)
+    return True
 
 
 def ensure_failover_video(ctx: ChannelContext) -> None:

@@ -122,6 +122,7 @@ def _create_channel_context(cfg: dict) -> ChannelContext:
     identity_cfg = cfg.get("identity", {})
     failover_cfg = cfg.get("failover", {})
     slate_cfg = cfg.get("slate", {})
+    encoding_cfg = cfg.get("encoding", {})
 
     ctx = ChannelContext(
         id=cfg["id"],
@@ -167,6 +168,14 @@ def _create_channel_context(cfg: dict) -> ChannelContext:
         slate_subtitle=slate_cfg.get("subtitle", "No content scheduled"),
         slate_duration=slate_cfg.get("duration", 30),
         slate_pattern=slate_cfg.get("pattern", "black"),
+        # Encoding / composition
+        encoding_width=encoding_cfg.get("width", 1280),
+        encoding_height=encoding_cfg.get("height", 720),
+        encoding_fps=encoding_cfg.get("fps", 25),
+        encoding_video_bitrate=encoding_cfg.get("video_bitrate", 2500),
+        encoding_audio_bitrate=encoding_cfg.get("audio_bitrate", 128),
+        encoding_preset=encoding_cfg.get("preset", "ultrafast"),
+        layer_preset=cfg.get("layer_preset"),
     )
     return ctx
 
@@ -301,11 +310,14 @@ async def lifespan(app: FastAPI):
         ctx = _create_default_channel()
         channels.register(ctx)
 
-    # Generate Ed25519 keypairs for channels that don't have one
+    # Load or generate Ed25519 keypairs for each channel.
+    # Respects private_key_path from channel YAML if configured.
     for ctx in channels.all():
         try:
             federation_id, key_path = ensure_channel_keypair(
-                ctx.id, key_dir=config.KEY_DIR
+                ctx.id,
+                key_dir=config.KEY_DIR,
+                key_path_override=ctx.private_key_path or None,
             )
             ctx.channel_id = federation_id
             ctx.private_key_path = key_path
@@ -334,12 +346,27 @@ async def lifespan(app: FastAPI):
     # Mirror channels don't generate their own stream initially —
     # they replicate from the primary (section 10.8).
     try:
-        from playout import PlayoutEngine, OutputConfig, OutputType
+        from playout import PlayoutEngine, PlayoutConfig, OutputConfig, OutputType
+        from playout.mixer import LAYER_PRESETS
 
         playout = PlayoutEngine()
         # Use the first non-mirror channel for the primary engine.
         primary_ctx = next((c for c in channels.all() if not c.mirror_mode), None)
         if primary_ctx:
+            # Build playout config from channel YAML encoding section.
+            # This controls mixer resolution, fps, and layer count.
+            layer_configs = None
+            if primary_ctx.layer_preset and primary_ctx.layer_preset in LAYER_PRESETS:
+                layer_configs = LAYER_PRESETS[primary_ctx.layer_preset]
+                logger.info("Using layer preset: %s", primary_ctx.layer_preset)
+
+            playout_config = PlayoutConfig(
+                width=primary_ctx.encoding_width,
+                height=primary_ctx.encoding_height,
+                fps=primary_ctx.encoding_fps,
+                layers=layer_configs,
+            )
+
             # Build default output config from channel context.
             # Use channel_id (federation ID) for the HLS path so
             # phosphor can find the stream by channel ID.
@@ -353,10 +380,19 @@ async def lifespan(app: FastAPI):
                 hls_dir=hls_dir,
                 segment_duration=config.HLS_SEGMENT_DURATION,
                 playlist_length=config.HLS_PLAYLIST_LENGTH,
+                video_bitrate=primary_ctx.encoding_video_bitrate,
+                audio_bitrate=primary_ctx.encoding_audio_bitrate,
+                preset=primary_ctx.encoding_preset,
             )
-            await playout.start(default_output=default_output)
+            await playout.start(config=playout_config, default_output=default_output)
             primary_ctx.engine = playout
-            logger.info("GStreamer playout engine started → HLS at %s", hls_dir)
+            logger.info(
+                "GStreamer playout engine started: %dx%d@%dfps → HLS at %s",
+                primary_ctx.encoding_width,
+                primary_ctx.encoding_height,
+                primary_ctx.encoding_fps,
+                hls_dir,
+            )
         else:
             logger.warning("No non-mirror channels — engine started with no sources")
     except ImportError:

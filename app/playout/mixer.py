@@ -70,6 +70,10 @@ class LayerConfig:
 
 # ── Built-in layer presets ──
 
+PRESET_SOLO: list[LayerConfig] = [
+    LayerConfig(name="content", role="content"),
+]
+
 PRESET_MINIMAL: list[LayerConfig] = [
     LayerConfig(name="failover", role="safety"),
     LayerConfig(name="content", role="content"),
@@ -83,6 +87,7 @@ PRESET_STANDARD: list[LayerConfig] = [
 ]
 
 LAYER_PRESETS: dict[str, list[LayerConfig]] = {
+    "solo": PRESET_SOLO,
     "minimal": PRESET_MINIMAL,
     "standard": PRESET_STANDARD,
 }

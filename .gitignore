@@ -9,6 +9,9 @@ config/channels/*.yaml
 data/
 dev-data/
 
+# Legacy build artifacts
+docker/
+
 # Environment (contains secrets)
 .env
 

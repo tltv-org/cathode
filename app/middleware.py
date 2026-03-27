@@ -107,11 +107,31 @@ class CharsetMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract the real client IP, respecting reverse proxy headers.
+
+    Reads X-Forwarded-For (set by Traefik/nginx/Caddy) first, falling
+    back to the TCP connection address.  Only the leftmost (client) IP
+    from X-Forwarded-For is used — intermediate proxies are ignored.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # X-Forwarded-For: client, proxy1, proxy2
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Simple IP-based rate limiting for /api/* endpoints.
 
     Allows RATE_LIMIT requests per RATE_WINDOW seconds per IP.
     Only applies to /api/* routes — protocol endpoints are unlimited.
+
+    Behind a reverse proxy (Traefik, nginx, Caddy), uses X-Forwarded-For
+    or X-Real-IP to identify the real client.
     """
 
     def __init__(self, app, rate_limit: int = 120, rate_window: int = 60):
@@ -127,7 +147,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/"):
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_client_ip(request)
         now = time.monotonic()
 
         # Prune old entries for this IP

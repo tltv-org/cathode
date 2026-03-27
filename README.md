@@ -16,13 +16,13 @@ cp .env.example .env
 docker compose up -d
 ```
 
-On first run, cathode generates a failover video and channel slate, creates an Ed25519 keypair for federation, and starts streaming. The API is at port 8888 via traefik. Interactive docs at `/docs`.
+On first run, cathode creates an Ed25519 keypair for federation and starts streaming immediately. System videos (failover + slate) generate in the background. The API is available within seconds at port 8888 via traefik. Interactive docs at `/docs`.
 
-See [SETUP.md](SETUP.md) for TLS, federation, and private channels.
+See [SETUP.md](SETUP.md) for TLS, federation, encoding, and private channels.
 
 ### First run
 
-On startup, cathode generates system videos if missing (failover + slate), loads the failover video on the safety layer, and begins streaming. No media scan, no auto-playlist — just clean slate until you configure content.
+On startup, cathode starts the playout engine immediately with a live failover pattern. System videos generate in the background and are loaded once ready. No media scan, no auto-playlist — just clean slate until you configure content.
 
 **Boot priority for input_a:**
 1. **Persisted state** — if a named playlist was active before restart, it's restored
@@ -126,7 +126,8 @@ Key design properties:
 - **Crash isolation** — a source or output pipeline failure cannot take down the mixer
 - **Safe teardown** — `pipeline.set_state(NULL)` is atomic per pipeline; no deadlocks
 - **Clean lifecycle** — no element accumulation for long-running playlists
-- **Data-driven layers** — configurable layer count and roles (safety, content, override, overlay)
+- **Data-driven layers** — configurable layer count and roles (solo, minimal, standard presets)
+- **Configurable encoding** — resolution, fps, bitrate set in channel YAML, changeable at runtime
 
 ## Plugins
 

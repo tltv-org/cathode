@@ -23,6 +23,24 @@ identity:
   access: "public"     # "public" or "private"
   origins: []          # Public hostnames for federation hints
 
+# Encoding — controls mixer and output resolution.
+# Defaults to 1920x1080@30fps.  Lower resolution = less CPU.
+# Changeable at runtime via PATCH /api/playout/encoding.
+# encoding:
+#   width: 1920
+#   height: 1080
+#   fps: 30
+#   video_bitrate: 3000    # kbps
+#   audio_bitrate: 128     # kbps
+#   preset: "ultrafast"    # x264enc speed-preset
+
+# Layer preset — controls how many GStreamer pipelines run.
+# Each layer costs CPU even when hidden.
+#   "solo"     — 1 layer (content only, no failover)
+#   "minimal"  — 2 layers (failover + content)
+#   "standard" — 4 layers (failover + input_a + input_b + blinder, default)
+# layer_preset: "standard"
+
 # Output — HLS served directly via hlssink2.
 # Additional outputs (RTMP, recording) added at runtime via /api/outputs.
 output:
@@ -33,20 +51,20 @@ media:
   base_dir: "/media"
   program_dir: "/data/programs"
 
-# Failover — safety layer (layer 0), loops under all live content.
+# Failover — safety layer, loops under all live content.
 # Auto-generated on first boot.  Customize and call
 # POST /api/playout/failover/regenerate to apply.
 failover:
   title: ""              # defaults to display_name
   subtitle: ""
-  duration: 60           # seconds
+  duration: 30           # seconds
   pattern: "smpte"       # GStreamer videotestsrc pattern
 
-# Slate — default content on input_a when no playlist is active.
+# Slate — default content when no playlist is active.
 # Auto-generated on first boot.  Customize and call
 # POST /api/playout/slate/regenerate to apply.
 slate:
   title: ""              # defaults to display_name
   subtitle: "No content scheduled"
-  duration: 300
+  duration: 30
   pattern: "black"

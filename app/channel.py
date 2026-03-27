@@ -106,6 +106,17 @@ class ChannelContext:
     mirror_mode: bool = False
     mirror_primary: str | None = None  # Primary origin hint (host:port)
 
+    # Encoding / composition config — controls mixer resolution and
+    # default output encoding.  Read from channel YAML at boot,
+    # changeable at runtime via PATCH /api/playout/encoding (restarts engine).
+    encoding_width: int = 1920
+    encoding_height: int = 1080
+    encoding_fps: int = 30
+    encoding_video_bitrate: int = 3000  # kbps
+    encoding_audio_bitrate: int = 128  # kbps
+    encoding_preset: str = "ultrafast"
+    layer_preset: str | None = None  # None = "standard" (4 layers)
+
     # Failover config — safety layer video parameters.
     # Customizable via PATCH /api/playout/failover.  Persisted to YAML.
     failover_title: str | None = None  # defaults to display_name
