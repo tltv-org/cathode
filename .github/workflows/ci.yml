@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ── Integration tests (mocked engine, no GStreamer needed) ──
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+              | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+          fi
+          if ! docker info >/dev/null 2>&1; then
+            echo "DOCKER_HOST=tcp://docker-proxy:2375" >> "$GITHUB_ENV"
+          fi
+          docker version
+
+      - name: Build test image
+        run: docker build -f app/Dockerfile --target test -t cathode:test .
+
+      - name: Run integration tests
+        run: |
+          docker run --rm cathode:test \
+            python3 -m pytest tests/ -v \
+            --ignore=tests/test_engine_lifecycle.py \
+            --ignore=tests/test_playlist.py \
+            --ignore=tests/test_playbin3_gapless.py \
+            --ignore=tests/test_played_position.py \
+            --ignore=tests/test_layer_switching.py \
+            --ignore=tests/test_source_types.py \
+            --ignore=tests/test_auto_failover.py \
+            --ignore=tests/test_health.py \
+            --ignore=tests/test_output.py
+
+  # ── Engine tests (real GStreamer, fakesink output) ──
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+              | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+          fi
+          if ! docker info >/dev/null 2>&1; then
+            echo "DOCKER_HOST=tcp://docker-proxy:2375" >> "$GITHUB_ENV"
+          fi
+          docker version
+
+      - name: Build test image
+        run: docker build -f app/Dockerfile --target test -t cathode:test .
+
+      - name: Run full test suite
+        run: |
+          docker run --rm \
+            -e GST_DEBUG=2 \
+            cathode:test \
+            python3 -m pytest tests/ -v
+
+  # ── Push image to container registry ──
+  push:
+    needs: [integration, engine]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+              | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+          fi
+          if ! docker info >/dev/null 2>&1; then
+            echo "DOCKER_HOST=tcp://docker-proxy:2375" >> "$GITHUB_ENV"
+          fi
+
+      - name: Detect registry
+        id: detect
+        run: |
+          SERVER="${{ github.server_url }}"
+          REPO="${{ github.repository }}"
+          BRANCH="${{ github.ref_name }}"
+          if echo "$SERVER" | grep -q "github\.com"; then
+            echo "registry=ghcr.io" >> "$GITHUB_OUTPUT"
+            echo "image=ghcr.io/${REPO}" >> "$GITHUB_OUTPUT"
+          else
+            HOST="${FORGEJO_REGISTRY:-$(echo "$SERVER" | sed 's|https\?://||' | sed 's|:[0-9]*$||')}"
+            echo "registry=${HOST}" >> "$GITHUB_OUTPUT"
+            echo "image=${HOST}/${REPO}" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$BRANCH" = "dev" ]; then
+            echo "tag=dev" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "main" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to registry
+        run: |
+          TOKEN="${{ secrets.PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}"
+          echo "${TOKEN}" | \
+            docker login "${{ steps.detect.outputs.registry }}" \
+              -u "${{ github.repository_owner }}" --password-stdin
+
+      - name: Build production image
+        run: |
+          docker build -f app/Dockerfile --target full \
+            -t "${{ steps.detect.outputs.image }}:${{ steps.detect.outputs.tag }}" .
+
+      - name: Push image
+        run: |
+          docker push "${{ steps.detect.outputs.image }}:${{ steps.detect.outputs.tag }}"

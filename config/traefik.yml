@@ -1,0 +1,25 @@
+# Traefik file provider for production compose.
+# Routes all traffic through a single port:
+#   /api/*, /hls/*, /tltv/*, /docs, /.well-known/tltv → cathode
+#   everything else → phosphor (viewer + dashboard)
+http:
+  routers:
+    cathode:
+      rule: "PathPrefix(`/api`) || PathPrefix(`/hls`) || PathPrefix(`/tltv`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`) || PathPrefix(`/.well-known/tltv`)"
+      entryPoints: [web]
+      service: cathode
+      priority: 10
+    phosphor:
+      rule: "PathPrefix(`/`)"
+      entryPoints: [web]
+      service: phosphor
+      priority: 1
+  services:
+    cathode:
+      loadBalancer:
+        servers:
+          - url: "http://cathode:8000"
+    phosphor:
+      loadBalancer:
+        servers:
+          - url: "http://phosphor:80"

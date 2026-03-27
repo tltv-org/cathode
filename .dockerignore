@@ -1,0 +1,15 @@
+# Runtime data — mounted as volumes
+media/
+data/
+
+# Git
+.git/
+
+# Documentation
+docs/
+*.md
+
+# Editor/tool artifacts
+.ruff_cache/
+__pycache__/
+*.pyc

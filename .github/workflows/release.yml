@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker
+        run: |
+          if ! command -v docker &>/dev/null; then
+            curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+              | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+          fi
+          if ! docker info &>/dev/null; then
+            echo "DOCKER_HOST=tcp://docker-proxy:2375" >> "$GITHUB_ENV"
+            export DOCKER_HOST=tcp://docker-proxy:2375
+          fi
+
+      - name: Detect release target
+        id: detect
+        env:
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if echo "$SERVER" | grep -q "github\.com"; then
+            HOST="ghcr.io"
+            echo "registry=${HOST}" >> "$GITHUB_OUTPUT"
+            echo "image=${HOST}/${REPO}" >> "$GITHUB_OUTPUT"
+            echo "api_base=https://api.github.com/repos/${REPO}" >> "$GITHUB_OUTPUT"
+            echo "upload_mode=github" >> "$GITHUB_OUTPUT"
+          else
+            HOST="${FORGEJO_REGISTRY:-$(echo "$SERVER" | sed 's|https\?://||' | sed 's|:[0-9]*$||')}"
+            echo "registry=${HOST}" >> "$GITHUB_OUTPUT"
+            echo "image=${HOST}/${REPO}" >> "$GITHUB_OUTPUT"
+            echo "api_base=${SERVER}/api/v1/repos/${REPO}" >> "$GITHUB_OUTPUT"
+            echo "upload_mode=forgejo" >> "$GITHUB_OUTPUT"
+          fi
+
+          PRERELEASE=false
+          if echo "$TAG" | grep -qE '(rc|alpha|beta)'; then
+            PRERELEASE=true
+          fi
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}, Prerelease: ${PRERELEASE}"
+
+      - name: Login to registry
+        run: |
+          TOKEN="${{ secrets.PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}"
+          echo "${TOKEN}" | \
+            docker login "${{ steps.detect.outputs.registry }}" \
+              -u "${{ github.repository_owner }}" --password-stdin
+
+      - name: Build full image
+        run: |
+          docker build -f app/Dockerfile --target full \
+            -t "${{ steps.detect.outputs.image }}:${{ github.ref_name }}" \
+            -t "${{ steps.detect.outputs.image }}:latest" .
+
+      - name: Build slim image
+        run: |
+          docker build -f app/Dockerfile --target slim \
+            -t "${{ steps.detect.outputs.image }}:${{ github.ref_name }}-slim" \
+            -t "${{ steps.detect.outputs.image }}:slim" .
+
+      - name: Push images
+        run: |
+          docker push "${{ steps.detect.outputs.image }}:${{ github.ref_name }}"
+          docker push "${{ steps.detect.outputs.image }}:latest"
+          docker push "${{ steps.detect.outputs.image }}:${{ github.ref_name }}-slim"
+          docker push "${{ steps.detect.outputs.image }}:slim"
+
+      - name: Delete stale release
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN || secrets.GITEA_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          API_BASE: ${{ steps.detect.outputs.api_base }}
+        run: |
+          EXISTING=$(curl -sS -w "\nHTTP_CODE:%{http_code}" \
+            -H "Authorization: token ${TOKEN}" \
+            "${API_BASE}/releases/tags/${TAG}" 2>&1)
+          HTTP_CODE=$(echo "$EXISTING" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+          BODY=$(echo "$EXISTING" | sed '/^HTTP_CODE:/d')
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            EXISTING_ID=$(echo "$BODY" | grep -o '"id" *: *[0-9]*' | head -1 | grep -o '[0-9]*')
+            if [ -n "$EXISTING_ID" ]; then
+              echo "Deleting stale release (id: ${EXISTING_ID})..."
+              curl -sS -X DELETE \
+                -H "Authorization: token ${TOKEN}" \
+                "${API_BASE}/releases/${EXISTING_ID}"
+            fi
+          fi
+
+      - name: Create release
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN || secrets.GITEA_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          API_BASE: ${{ steps.detect.outputs.api_base }}
+          PRERELEASE: ${{ steps.detect.outputs.prerelease }}
+          IMAGE: ${{ steps.detect.outputs.image }}
+        run: |
+          BODY="## cathode ${TAG}
+
+          ### Docker images
+
+          | Tag | Contents |
+          |---|---|
+          | \`${IMAGE}:${TAG}\` | Full (GStreamer + WPE WebKit + numpy + Pillow) |
+          | \`${IMAGE}:${TAG}-slim\` | Slim (GStreamer only, no plugin system deps) |
+
+          \`\`\`bash
+          docker pull ${IMAGE}:${TAG}        # full (recommended)
+          docker pull ${IMAGE}:${TAG}-slim   # relay-only / minimal
+          \`\`\`"
+
+          # Escape for JSON
+          BODY_JSON=$(echo "$BODY" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          curl -sS -X POST \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"cathode ${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":${PRERELEASE}}" \
+            "${API_BASE}/releases"

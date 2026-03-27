@@ -1,0 +1,35 @@
+# Media files (too large for git)
+media/
+
+# Channel configs (copy from .example.yaml to get started)
+config/channels/*.yaml
+!config/channels/*.example.yaml
+
+# Runtime data
+data/
+dev-data/
+
+# Environment (contains secrets)
+.env
+
+# Plugins (populated by volume mounts at runtime)
+app/plugins/*/
+
+# Core dumps
+core
+app/core
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.coverage
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.ruff_cache/
