@@ -1,0 +1,10 @@
+# Constraints for plugin pip installs.
+# Prevents plugins from breaking cathode's core dependencies.
+# Versions match requirements.lock.
+fastapi>=0.100,<1.0
+uvicorn>=0.20,<1.0
+httpx>=0.24,<1.0
+pydantic>=2.0,<3.0
+PyYAML>=6.0,<7.0
+PyGObject>=3.42
+pynacl>=1.5.0

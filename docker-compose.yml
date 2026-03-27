@@ -1,0 +1,72 @@
+# Production — pulls release images from GHCR.
+#
+# Usage:
+#   cp .env.example .env   # edit: set API_KEY
+#   docker compose up -d
+#
+# Port: 8888 (traefik → phosphor + cathode on one port)
+#
+# Required:
+#   API_KEY — management API key (generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+#
+# Traefik routes:
+#   /           → phosphor (viewer + management dashboard)
+#   /api/*      → cathode
+#   /hls/*      → cathode
+#   /tltv/*     → cathode
+#   /docs       → cathode (swagger)
+#
+# For TLS, put Caddy/nginx in front of port 8888 (see SETUP.md).
+
+name: cathode-prod
+
+services:
+  traefik:
+    container_name: cathode-prod-traefik
+    image: traefik:v3.4
+    command:
+      - --providers.file.filename=/etc/traefik/routes.yml
+      - --entrypoints.web.address=:80
+    ports:
+      - "8888:80"
+    volumes:
+      - ./config/traefik.yml:/etc/traefik/routes.yml:ro
+    restart: unless-stopped
+
+  phosphor:
+    container_name: cathode-prod-phosphor
+    image: ghcr.io/tltv-org/phosphor:latest
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://0.0.0.0:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  cathode:
+    container_name: cathode-prod
+    image: ghcr.io/tltv-org/cathode:latest
+    volumes:
+      - ./config/channels:/config/channels
+      - ./data:/data
+      - ./media:/media
+      # Plugins — mount from cathode-plugins if installed:
+      # - ./cathode-plugins:/app/plugins
+    depends_on:
+      phosphor:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - HLS_OUTPUT_DIR=/data/hls
+      - MEDIA_DIR=/media
+      - PLAYLIST_DIR=/data/playlists
+      - PROGRAM_DIR=/data/programs
+      - TZ=${TZ:-UTC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/.well-known/tltv')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
