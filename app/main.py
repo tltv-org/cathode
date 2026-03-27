@@ -161,11 +161,11 @@ def _create_channel_context(cfg: dict) -> ChannelContext:
         # Failover/slate customization
         failover_title=failover_cfg.get("title"),
         failover_subtitle=failover_cfg.get("subtitle"),
-        failover_duration=failover_cfg.get("duration", 60),
+        failover_duration=failover_cfg.get("duration", 30),
         failover_pattern=failover_cfg.get("pattern", "smpte"),
         slate_title=slate_cfg.get("title"),
         slate_subtitle=slate_cfg.get("subtitle", "No content scheduled"),
-        slate_duration=slate_cfg.get("duration", 300),
+        slate_duration=slate_cfg.get("duration", 30),
         slate_pattern=slate_cfg.get("pattern", "black"),
     )
     return ctx

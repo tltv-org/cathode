@@ -110,14 +110,14 @@ class ChannelContext:
     # Customizable via PATCH /api/playout/failover.  Persisted to YAML.
     failover_title: str | None = None  # defaults to display_name
     failover_subtitle: str | None = None
-    failover_duration: int = 60
+    failover_duration: int = 30
     failover_pattern: str = "smpte"
 
     # Slate config — default input_a content parameters.
     # Customizable via PATCH /api/playout/slate.  Persisted to YAML.
     slate_title: str | None = None  # defaults to display_name
     slate_subtitle: str = "No content scheduled"
-    slate_duration: int = 300
+    slate_duration: int = 30
     slate_pattern: str = "black"
 
     # Key migration (PROTOCOL.md section 5.14) — when set, this channel
