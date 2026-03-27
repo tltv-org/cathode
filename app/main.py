@@ -184,6 +184,100 @@ def _create_default_channel() -> ChannelContext:
     )
 
 
+# ── Post-startup helpers ──
+
+
+def _restore_input_a(engine, ctx) -> bool:
+    """Restore input_a from persisted state or leave on failover.
+
+    Returns True if real content was loaded (persisted playlist),
+    False if falling back to slate/failover.
+
+    Boot priority:
+    1. Persisted state (named playlist from last session)
+    2. Existing slate file on disk (from previous boot)
+    3. Nothing — failover layer shows through (first boot)
+    """
+    try:
+        import playout_state
+        import named_playlist_store
+        from playout.input_layer import PlaylistEntry
+
+        layer_state = playout_state.get_layer_state(ctx.id, "input_a")
+
+        if layer_state and layer_state.get("playlist_name"):
+            pl_name = layer_state["playlist_name"]
+            pl_data = named_playlist_store.get(pl_name, channel_id=ctx.id)
+            if pl_data and pl_data.get("entries"):
+                entries = [
+                    PlaylistEntry(
+                        source=e["source"],
+                        duration=e.get("duration", 0),
+                    )
+                    for e in pl_data["entries"]
+                ]
+                loop = layer_state.get("loop", True)
+                engine.input_a.load_playlist(entries, loop=loop, name=pl_name)
+                engine.show("input_a")
+                logger.info("Restored playlist '%s': %d clips", pl_name, len(entries))
+                return True
+            else:
+                logger.warning(
+                    "Persisted playlist '%s' not found — falling back", pl_name
+                )
+
+        # No persisted state — try existing slate file from a previous boot
+        slate_path = os.path.join(ctx.generated_dir, config.SLATE_FILENAME)
+        if os.path.isfile(slate_path):
+            engine.input_a.load_file_loop(slate_path)
+            engine.show("input_a")
+            logger.info("Channel slate loaded: %s", slate_path)
+            return False
+
+        # First boot — no files exist yet.  Failover shows through.
+        logger.info("First boot — failover active until system videos are generated")
+        return False
+    except Exception as exc:
+        logger.warning("Failed to restore input_a: %s", exc)
+        return False
+
+
+async def _generate_and_load_system_videos(engine, ctx, has_content: bool) -> None:
+    """Generate failover + slate videos in the background, then load them.
+
+    Runs as an asyncio task so the API is available immediately on boot.
+    Video generation is CPU-bound (GStreamer), so we run it in a thread.
+
+    Args:
+        has_content: True if _restore_input_a loaded a real playlist.
+            When True, the slate is still generated but not loaded on
+            input_a (the playlist takes priority).
+    """
+    loop = asyncio.get_event_loop()
+
+    # Generate failover video
+    try:
+        await loop.run_in_executor(None, scheduler.ensure_failover_video, ctx)
+        failover_path = os.path.join(ctx.generated_dir, config.FAILOVER_FILENAME)
+        if os.path.isfile(failover_path):
+            engine.failover.load_file_loop(failover_path)
+            logger.info("Failover video loaded: %s", failover_path)
+    except Exception as exc:
+        logger.warning("Failed to generate/load failover video: %s", exc)
+
+    # Generate slate video
+    try:
+        await loop.run_in_executor(None, scheduler.ensure_slate_video, ctx)
+        if not has_content:
+            slate_path = os.path.join(ctx.generated_dir, config.SLATE_FILENAME)
+            if os.path.isfile(slate_path):
+                engine.input_a.load_file_loop(slate_path)
+                engine.show("input_a")
+                logger.info("Channel slate loaded: %s", slate_path)
+    except Exception as exc:
+        logger.warning("Failed to generate/load slate video: %s", exc)
+
+
 # ── App lifecycle ──
 
 
@@ -279,72 +373,21 @@ async def lifespan(app: FastAPI):
     # These run AFTER the engine is confirmed started — failures here
     # must NOT null out playout (the engine is already running).
     if playout is not None and primary_ctx is not None:
-        try:
-            scheduler.ensure_failover_video(primary_ctx)
-            scheduler.ensure_slate_video(primary_ctx)
-        except Exception as exc:
-            logger.warning("Failed to generate system videos: %s", exc)
-
-        # Load failover on safety layer
-        failover_path = os.path.join(
-            primary_ctx.generated_dir, config.FAILOVER_FILENAME
-        )
-        try:
-            if os.path.isfile(failover_path):
-                playout.failover.load_file_loop(failover_path)
-                playout.show("failover")
-                logger.info("Failover video loaded: %s", failover_path)
-        except Exception as exc:
-            logger.warning("Failed to load failover video: %s", exc)
-
-        # Restore input_a from persisted playout state.
+        # Failover layer starts immediately with the live SMPTE generator
+        # (load_failover — pure in-memory, no file needed).  The engine
+        # already did this during start(), so failover is showing now.
         #
-        # Boot priority:
-        # 1. Persisted state (named playlist from last session)
-        # 2. Channel slate (always generated — default content)
-        try:
-            import playout_state
-            import named_playlist_store
-            from playout.input_layer import PlaylistEntry
+        # Try to restore input_a from persisted state first.  If there's
+        # a saved playlist, load it immediately — no need to wait for
+        # video generation.
+        has_content = _restore_input_a(playout, primary_ctx)
 
-            layer_state = playout_state.get_layer_state(primary_ctx.id, "input_a")
-
-            if layer_state and layer_state.get("playlist_name"):
-                pl_name = layer_state["playlist_name"]
-                pl_data = named_playlist_store.get(pl_name, channel_id=primary_ctx.id)
-                if pl_data and pl_data.get("entries"):
-                    entries = [
-                        PlaylistEntry(
-                            source=e["source"],
-                            duration=e.get("duration", 0),
-                        )
-                        for e in pl_data["entries"]
-                    ]
-                    loop = layer_state.get("loop", True)
-                    playout.input_a.load_playlist(entries, loop=loop, name=pl_name)
-                    playout.show("input_a")
-                    logger.info(
-                        "Restored playlist '%s': %d clips",
-                        pl_name,
-                        len(entries),
-                    )
-                else:
-                    logger.warning(
-                        "Persisted playlist '%s' not found — falling back to slate",
-                        pl_name,
-                    )
-                    layer_state = None  # fall through to slate
-
-            if not layer_state or not layer_state.get("playlist_name"):
-                slate_path = os.path.join(
-                    primary_ctx.generated_dir, config.SLATE_FILENAME
-                )
-                if os.path.isfile(slate_path):
-                    playout.input_a.load_file_loop(slate_path)
-                    playout.show("input_a")
-                    logger.info("Channel slate loaded: %s", slate_path)
-        except Exception as exc:
-            logger.warning("Failed to restore sources after engine start: %s", exc)
+        # Generate failover + slate videos in the background.  Once done,
+        # swap the failover layer from live generator to file loop, and
+        # if input_a doesn't have real content, load the slate file.
+        asyncio.create_task(
+            _generate_and_load_system_videos(playout, primary_ctx, has_content)
+        )
 
     logger.debug("Waiting for playout to start streaming...")
     await asyncio.sleep(config.STARTUP_DELAY)
