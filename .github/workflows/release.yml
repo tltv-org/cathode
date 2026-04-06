@@ -108,6 +108,7 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN || secrets.GITEA_TOKEN }}
           TAG: ${{ github.ref_name }}
           API_BASE: ${{ steps.detect.outputs.api_base }}
+          UPLOAD_MODE: ${{ steps.detect.outputs.upload_mode }}
           PRERELEASE: ${{ steps.detect.outputs.prerelease }}
           IMAGE: ${{ steps.detect.outputs.image }}
         run: |
@@ -124,6 +125,23 @@ jobs:
           docker pull ${IMAGE}:${TAG}        # full (recommended)
           docker pull ${IMAGE}:${TAG}-slim   # relay-only / minimal
           \`\`\`"
+
+          # Auto-generate changelog on GitHub
+          if [ "$UPLOAD_MODE" = "github" ]; then
+            AUTO_NOTES=$(curl -sS -X POST \
+              -H "Authorization: token ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"${TAG}\"}" \
+              "${API_BASE}/releases/generate-notes" 2>/dev/null \
+              | python3 -c "import sys,json; print(json.load(sys.stdin).get('body',''))" 2>/dev/null || true)
+            if [ -n "$AUTO_NOTES" ]; then
+              BODY="${BODY}
+
+          ---
+
+          ${AUTO_NOTES}"
+            fi
+          fi
 
           # Escape for JSON
           BODY_JSON=$(echo "$BODY" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")

@@ -142,3 +142,14 @@ For the full endpoint reference, see [docs/API.md](docs/API.md).
 ## Federation
 
 TLTV federation protocol (v1): Ed25519 signed metadata, gossip-based peer discovery, HLS segment relay, private channel access tokens, `tltv://` URI scheme. Full spec at [tltv-org/protocol](https://github.com/tltv-org/protocol).
+
+## Links
+
+- [timelooptv.org](https://timelooptv.org) — Project homepage
+- [Spec](https://spec.timelooptv.org) — Protocol specification
+- [Demo](https://demo.timelooptv.org) — Live demo
+- [GitHub](https://github.com/tltv-org) — All repositories
+
+## License
+
+MIT -- see [LICENSE](LICENSE).
